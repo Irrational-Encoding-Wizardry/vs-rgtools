@@ -175,7 +175,7 @@ def side_box_blur(
 
 def gauss_blur(
     clip: vs.VideoNode, sigma: float | list[float] = 0.5, taps: int | None = None,
-    mode: ConvMode = ConvMode.HV, planes: PlanesT = None, use_fmtc: bool = False
+    mode: ConvMode = ConvMode.HV, planes: PlanesT = None, speedup: bool | None = None
 ) -> vs.VideoNode:
     assert check_variable(clip, gauss_blur)
 
@@ -193,6 +193,7 @@ def gauss_blur(
     taps = BlurMatrix.GAUSS.get_taps(sigma, (orig_taps := taps))
 
     no_resize2 = not hasattr(core, 'resize2')
+    speedup = speedup or (sigma > 3.0 or (taps is not None and taps > 30))
 
     kernel = BlurMatrix.GAUSS(sigma, taps, 1.0 if no_resize2 and taps > 12 else 1023)
 
@@ -235,10 +236,10 @@ def gauss_blur(
         ).scale(down, plane.width, plane.height)
 
     if not {*range(clip.format.num_planes)} - {*planes}:
-        return _fmtc_blur(clip) if use_fmtc else _resize2_blur(clip)
+        return _fmtc_blur(clip) if speedup else _resize2_blur(clip)
 
     return join([
-        _fmtc_blur(p) if use_fmtc else _resize2_blur(p)
+        _fmtc_blur(p) if speedup else _resize2_blur(p)
         if i in planes else p
         for i, p in enumerate(split(clip))
     ])
