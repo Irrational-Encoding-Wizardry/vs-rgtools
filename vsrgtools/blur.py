@@ -6,7 +6,7 @@ from math import e, log2
 from typing import Any
 
 from vsexprtools import ExprOp, ExprVars, complexpr_available, norm_expr
-from vskernels import Gaussian
+from vskernels import Bilinear, Gaussian
 from vspyplugin import FilterMode, ProcessMode, PyPluginCuda
 from vstools import (
     ConvMode, CustomNotImplementedError, CustomRuntimeError, FunctionUtil, NotFoundEnumValue, PlanesT, StrList,
@@ -175,7 +175,7 @@ def side_box_blur(
 
 def gauss_blur(
     clip: vs.VideoNode, sigma: float | list[float] = 0.5, taps: int | None = None,
-    mode: ConvMode = ConvMode.HV, planes: PlanesT = None
+    mode: ConvMode = ConvMode.HV, planes: PlanesT = None, use_fmtc: bool = False
 ) -> vs.VideoNode:
     assert check_variable(clip, gauss_blur)
 
@@ -190,7 +190,7 @@ def gauss_blur(
     if mode in ConvMode.HORIZONTAL:
         sigma = min(sigma, clip.width)
 
-    taps = BlurMatrix.GAUSS.get_taps(sigma, taps)
+    taps = BlurMatrix.GAUSS.get_taps(sigma, (orig_taps := taps))
 
     no_resize2 = not hasattr(core, 'resize2')
 
@@ -220,11 +220,26 @@ def gauss_blur(
     def _resize2_blur(plane: vs.VideoNode) -> vs.VideoNode:
         return Gaussian(sigma, taps).scale(plane, **{f'force_{k}': k in mode for k in 'hv'})  # type: ignore
 
+    def _fmtc_blur(plane: vs.VideoNode) -> vs.VideoNode:
+        wdown, hdown = plane.width, plane.height
+
+        if ConvMode.HORIZONTAL in mode:
+            wdown = round(max(round(wdown / sigma), 2) / 2) * 2
+        if ConvMode.VERTICAL in mode:
+            hdown = round(max(round(hdown / sigma), 2) / 2) * 2
+
+        down = Bilinear.scale(plane, wdown, hdown)
+
+        return Gaussian(
+            Gaussian.sigma.from_fmtc(9), min(fallback(orig_taps, 30), 128)
+        ).scale(down, plane.width, plane.height)
+
     if not {*range(clip.format.num_planes)} - {*planes}:
-        return _resize2_blur(clip)
+        return _fmtc_blur(clip) if use_fmtc else _resize2_blur(clip)
 
     return join([
-        _resize2_blur(p) if i in planes else p
+        _fmtc_blur(p) if use_fmtc else _resize2_blur(p)
+        if i in planes else p
         for i, p in enumerate(split(clip))
     ])
 
